@@ -7,6 +7,8 @@ obj-y += clock.o
 obj-y += gpio.o generic_gpio.o
 obj-y += nand_partitions.o
 
+obj-$(CONFIG_CINDER) += cinder.o
+
 obj-$(CONFIG_MSM_FIQ_SUPPORT) += fiq_glue.o
 obj-$(CONFIG_MACH_TROUT) += board-trout-rfkill.o
 obj-$(CONFIG_MSM_SMD) += smd.o smd_tty.o smd_qmi.o

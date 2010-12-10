@@ -52,6 +52,12 @@ config EXPERIMENTAL
 config BROKEN
 	bool
 
+config CINDER
+	bool "Enable Cinder"
+	default n
+	help
+	  Enables Cinder on this kernel.
+
 config BROKEN_ON_SMP
 	bool
 	depends on BROKEN || !SMP

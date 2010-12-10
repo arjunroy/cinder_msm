@@ -74,6 +74,10 @@
 #include <linux/ftrace.h>
 #include <trace/sched.h>
 
+#ifdef CONFIG_CINDER
+#include <linux/cinder.h>
+#endif
+
 #include <asm/tlb.h>
 #include <asm/irq_regs.h>
 
@@ -4598,6 +4602,10 @@ asmlinkage void __sched schedule(void)
 	unsigned long *switch_count;
 	struct rq *rq;
 	int cpu;
+#ifdef CONFIG_CINDER
+	struct timespec ts;
+	long current_ms, delta_ms, debit_amount;
+#endif
 
 need_resched:
 	preempt_disable();
@@ -4636,7 +4644,27 @@ need_resched_nonpreemptible:
 		idle_balance(cpu, rq);
 
 	prev->sched_class->put_prev_task(rq, prev);
+
+#ifdef CONFIG_CINDER
+	/* Get how long task ran */
+	ktime_get_ts(&ts);
+	current_ms = timespec_to_ms(&ts);
+	delta_ms = current_ms - prev->time_sched_start;
+
+	/* Calculate how much we debit */
+	debit_amount = (cinder_cpu_draw_rate_per_second() * delta_ms) / 1000;
+
+	spin_lock(&prev->active_reserve->reserve_lock);
+	prev->active_reserve->capacity -= debit_amount;
+	spin_unlock(&prev->active_reserve->reserve_lock);
+#endif
+
 	next = pick_next_task(rq, prev);
+
+#ifdef CONFIG_CINDER
+	/* Set when we were picked to run */
+	next->time_sched_start = current_ms;
+#endif
 
 	if (likely(prev != next)) {
 		sched_info_switch(prev, next);

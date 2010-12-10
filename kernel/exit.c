@@ -55,6 +55,10 @@
 #include <asm/mmu_context.h>
 #include "cred-internals.h"
 
+#ifdef CONFIG_CINDER
+#include <linux/cinder.h>
+#endif
+
 DEFINE_TRACE(sched_process_free);
 DEFINE_TRACE(sched_process_exit);
 DEFINE_TRACE(sched_process_wait);
@@ -1074,6 +1078,10 @@ NORET_TYPE void do_exit(long code)
 	if (group_dead)
 		acct_process();
 	trace_sched_process_exit(tsk);
+
+#ifdef CONFIG_CINDER
+	cinder_cleanup_task(tsk);
+#endif
 
 	exit_sem(tsk);
 	exit_files(tsk);

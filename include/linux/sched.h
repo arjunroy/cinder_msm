@@ -89,6 +89,10 @@ struct sched_param {
 #include <linux/latencytop.h>
 #include <linux/cred.h>
 
+#ifdef CONFIG_CINDER
+#include <linux/semaphore.h>
+#endif
+
 #include <asm/processor.h>
 
 struct mem_cgroup;
@@ -1119,6 +1123,33 @@ struct task_struct {
 	unsigned int ptrace;
 
 	int lock_depth;		/* BKL lock depth */
+
+#ifdef CONFIG_CINDER
+	/* Temporary testing */
+	int runb;
+	spinlock_t runb_lock;
+	wait_queue_head_t testwq;
+
+	wait_queue_t cwq;
+	long time_sched_start;
+
+	/* Per task data */
+	struct cinder_reserve *active_reserve;
+	int dummy;
+	int kthread_fork;
+
+	int num_child_reserves;
+	struct list_head child_create_reserves; /* reserves for forked child */
+
+	/* Per process data: stored by thread group leader */
+	struct semaphore cinder_lock;
+
+	int num_reserves;
+	struct list_head reserves; /* All reserves we can access. */
+
+	int num_taps;
+	struct list_head taps; /* All taps we created */
+#endif
 
 #ifdef CONFIG_SMP
 #ifdef __ARCH_WANT_UNLOCKED_CTXSW

@@ -36,6 +36,10 @@
 #include <asm/thread_notify.h>
 #include <asm/mach/time.h>
 
+#ifdef CONFIG_CINDER
+#include <linux/cinder.h>
+#endif
+
 static const char *processor_modes[] = {
   "USER_26", "FIQ_26" , "IRQ_26" , "SVC_26" , "UK4_26" , "UK5_26" , "UK6_26" , "UK7_26" ,
   "UK8_26" , "UK9_26" , "UK10_26", "UK11_26", "UK12_26", "UK13_26", "UK14_26", "UK15_26",
@@ -367,6 +371,11 @@ asm(	".section .text\n"
 pid_t kernel_thread(int (*fn)(void *), void *arg, unsigned long flags)
 {
 	struct pt_regs regs;
+	pid_t forkval;
+
+#ifdef CONFIG_CINDER
+	current->kthread_fork = 1;
+#endif
 
 	memset(&regs, 0, sizeof(regs));
 
@@ -376,7 +385,11 @@ pid_t kernel_thread(int (*fn)(void *), void *arg, unsigned long flags)
 	regs.ARM_pc = (unsigned long)kernel_thread_helper;
 	regs.ARM_cpsr = SVC_MODE;
 
-	return do_fork(flags|CLONE_VM|CLONE_UNTRACED, 0, &regs, 0, NULL, NULL);
+	forkval = do_fork(flags|CLONE_VM|CLONE_UNTRACED, 0, &regs, 0, NULL, NULL);
+#ifdef CONFIG_CINDER
+	current->kthread_fork = 0;
+#endif
+	return forkval;
 }
 EXPORT_SYMBOL(kernel_thread);
 

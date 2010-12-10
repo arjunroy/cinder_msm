@@ -55,6 +55,8 @@ struct compat_timeval;
 struct robust_list_head;
 struct getcpu_cache;
 struct old_linux_dirent;
+struct reserve_info;
+struct tap_info;
 
 #include <linux/types.h>
 #include <linux/aio_abi.h>
@@ -691,6 +693,42 @@ asmlinkage long sys_ppoll(struct pollfd __user *, unsigned int,
 			  size_t);
 asmlinkage long sys_pipe2(int __user *, int);
 asmlinkage long sys_pipe(int __user *);
+
+/* Cinder syscalls */
+asmlinkage int sys_create_reserve(char __user *, int);
+asmlinkage long sys_put_reserve(int);
+asmlinkage long sys_expose_reserve(pid_t, int, unsigned int);
+asmlinkage long sys_reserve_transfer(int, int, long, long);
+
+asmlinkage long sys_reserve_info(int, struct reserve_info __user *);
+asmlinkage long sys_reserve_level(int, long __user *);
+
+asmlinkage long sys_set_active_reserve(int);
+asmlinkage long sys_self_bill(long, long);
+
+asmlinkage long sys_num_reserves(void);
+asmlinkage long sys_get_reserve(long);
+
+/* Sched test */
+
+asmlinkage long sys_starve(pid_t pid);
+asmlinkage long sys_feed(pid_t pid);
+
+/* Cinder Taps */
+asmlinkage int sys_create_tap(char __user *, int, int, int);
+asmlinkage long sys_delete_tap(int);
+asmlinkage long sys_tap_info(int, struct tap_info __user *);
+asmlinkage long sys_tap_set_rate(int, long, long);
+
+asmlinkage long sys_num_taps(void);
+asmlinkage int sys_get_tap(long);
+
+/* Child reserve lists */
+
+asmlinkage long sys_add_reserve_to_child_list(int, unsigned int);
+asmlinkage long sys_del_reserve_from_child_list(int);
+asmlinkage long sys_num_child_list_reserves(void);
+asmlinkage int sys_get_child_list_reserve(long);
 
 int kernel_execve(const char *filename, char *const argv[], char *const envp[]);
 

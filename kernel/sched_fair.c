@@ -22,6 +22,10 @@
 
 #include <linux/latencytop.h>
 
+#ifdef CONFIG_CINDER
+#include <linux/cinder.h>
+#endif
+
 /*
  * Targeted preemption latency for CPU-bound tasks:
  * (default: 20ms * (1 + ilog(ncpus)), units: nanoseconds)
@@ -1453,6 +1457,31 @@ static void check_preempt_wakeup(struct rq *rq, struct task_struct *p, int sync)
 	}
 }
 
+void cinder_sched_check(struct task_struct *curr)
+{
+	unsigned long flags;
+
+	/* init and swapper get a free pass */
+	if (curr == &init_task)
+		return;
+
+	spin_lock(&cinder_ready_lock);
+	if (!cinder_ready) {
+		spin_unlock(&cinder_ready_lock);
+		return;
+	}
+	spin_unlock(&cinder_ready_lock);
+
+	/* Sleep if our active reserve is out of energy */
+	spin_lock_irqsave(&curr->active_reserve->reserve_lock, flags);
+	if (curr->active_reserve->capacity < 1) {
+		set_task_state(curr, TASK_UNINTERRUPTIBLE);
+		add_wait_queue(&curr->active_reserve->reserve_wq, &curr->cwq);
+		resched_task(curr);
+	}
+	spin_unlock_irqrestore(&curr->active_reserve->reserve_lock, flags);
+}
+
 static struct task_struct *pick_next_task_fair(struct rq *rq)
 {
 	struct task_struct *p;
@@ -1475,7 +1504,7 @@ static struct task_struct *pick_next_task_fair(struct rq *rq)
 
 	p = task_of(se);
 	hrtick_start_fair(rq, p);
-
+	cinder_sched_check(p);
 	return p;
 }
 

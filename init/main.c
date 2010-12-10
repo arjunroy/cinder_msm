@@ -75,6 +75,10 @@
 #include <asm/smp.h>
 #endif
 
+#ifdef CONFIG_CINDER
+#include <linux/cinder.h>
+#endif
+
 static int kernel_init(void *);
 
 extern void init_IRQ(void);
@@ -451,6 +455,10 @@ static noinline void __init_refok rest_init(void)
 	__releases(kernel_lock)
 {
 	int pid;
+
+#ifdef CONFIG_CINDER
+	cinder_setup(current);
+#endif
 
 	kernel_thread(kernel_init, NULL, CLONE_FS | CLONE_SIGHAND);
 	numa_default_policy();
@@ -831,6 +839,11 @@ static noinline int init_post(void)
 
 static int __init kernel_init(void * unused)
 {
+#ifdef CONFIG_CINDER
+	int err;
+	long retval;
+	struct task_struct *cinder_tap_thread;
+#endif
 	lock_kernel();
 	/*
 	 * init can run on any cpu.
@@ -859,6 +872,26 @@ static int __init kernel_init(void * unused)
 	cpuset_init_smp();
 
 	do_basic_setup();
+
+#ifdef CONFIG_CINDER
+	/* Sync root reserve battery info */
+	retval = cinder_battery_root_sync();
+	if (retval < 0) {
+		panic("ERROR CINDER: Could not stat battery info, result is %d.\n", (int) retval);
+	}
+	retval = cinder_max_battery_level();
+
+	cinder_tap_thread = kthread_run(cinder_tap_daemon, NULL, "kcindertapd");
+	if (IS_ERR(cinder_tap_thread)) {
+		err = PTR_ERR(cinder_tap_thread);
+		panic("ERROR CINDER: Could not start tap thread: %d\n", err);
+	}
+
+	spin_lock(&cinder_ready_lock);
+	cinder_ready = 1;
+	spin_unlock(&cinder_ready_lock);
+
+#endif
 
 	/*
 	 * check if there is an early userspace init.  If yes, let it do all

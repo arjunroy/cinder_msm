@@ -69,6 +69,10 @@
 #include <asm/cacheflush.h>
 #include <asm/tlbflush.h>
 
+#ifdef CONFIG_CINDER
+#include <linux/cinder.h>
+#endif
+
 /*
  * Protected counters by write_lock_irq(&tasklist_lock)
  */
@@ -1001,6 +1005,25 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 	if (retval < 0)
 		goto bad_fork_free;
 
+#ifdef CONFIG_CINDER
+	cinder_setup_task_common(p);
+	if (current->kthread_fork) {
+		retval = cinder_setup_kthread_reserve(p);
+		if (retval < 0)
+			goto bad_fork_free;
+	}
+	else if (!(clone_flags & CLONE_THREAD)) {
+		retval = cinder_setup_child_reserves(p, current);
+		if (retval < 0)
+			goto bad_fork_free;
+	}
+	else {
+		retval = cinder_setup_forked_thread(p, current);
+		if (retval < 0)
+			goto bad_fork_free;
+	}
+#endif
+
 	/*
 	 * If multiple threads are within copy_process(), then this check
 	 * triggers too late. This doesn't hurt, the check is only there
@@ -1316,6 +1339,9 @@ bad_fork_cleanup_count:
 	put_cred(p->real_cred);
 	put_cred(p->cred);
 bad_fork_free:
+#ifdef CONFIG_CINDER
+	cinder_cleanup_task(p);
+#endif
 	free_task(p);
 fork_out:
 	return ERR_PTR(retval);

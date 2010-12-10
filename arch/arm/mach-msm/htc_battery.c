@@ -591,6 +591,34 @@ succeed:
 	return rc;
 }
 
+#ifdef CONFIG_CINDER
+/* Method added for CINDER */
+int htc_battery_property_call(struct battery_info_reply *buffer)
+{
+	mutex_lock(&htc_batt_info.rpc_lock);
+	/* check cache time to decide if we need to update */
+	if (htc_batt_info.update_time &&
+            time_before(jiffies, htc_batt_info.update_time +
+                                msecs_to_jiffies(cache_time)))
+                goto dont_need_update;
+
+	if (htc_get_batt_info(&htc_batt_info.rep) < 0) {
+		printk(KERN_ERR "%s: rpc failed!!!\n", __FUNCTION__);
+	} else {
+		htc_batt_info.update_time = jiffies;
+	}
+dont_need_update:
+	mutex_unlock(&htc_batt_info.rpc_lock);
+
+	/* Copy data over */
+	mutex_lock(&htc_batt_info.lock);
+	memcpy(buffer, &htc_batt_info.rep, sizeof(*buffer));
+	mutex_unlock(&htc_batt_info.lock);
+
+	return 0;
+}
+#endif
+
 static ssize_t htc_battery_show_property(struct device *dev,
 					 struct device_attribute *attr,
 					 char *buf)
