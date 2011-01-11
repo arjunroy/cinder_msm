@@ -42,7 +42,6 @@ int cinder_tap_daemon(void * unused)
 	ktime_get_ts(&prev_ts);
 
 	for (;;) {
-		
 		ktime_get_ts(&ts);
 		current_ms = timespec_to_ms(&ts);
 		time_delta_ms = current_ms - timespec_to_ms(&prev_ts);
@@ -146,19 +145,6 @@ int cinder_tap_daemon(void * unused)
 			prev_capacity = dest_reserve->capacity;
 			dest_reserve->capacity += dest_reserve->value_to_add;
 			dest_reserve->value_to_add = 0;
-
-			if (prev_capacity < 0 && dest_reserve->capacity > 0) {
-				wait_queue_t *curr, *next;
-				unsigned long flags;
-
-				/* Wake up all tasks sleeping on this reserve */
-				spin_lock_irqsave(&dest_reserve->reserve_wq.lock, flags);
-				list_for_each_entry_safe(curr, next, &dest_reserve->reserve_wq.task_list, task_list) {
-					list_del(&curr->task_list);
-					curr->func(curr, TASK_NORMAL, 0, 0);
-				}
-				spin_unlock_irqrestore(&dest_reserve->reserve_wq.lock, flags);
-			}
 			spin_unlock(&dest_reserve->reserve_lock);
 		}
 		
@@ -333,6 +319,10 @@ void cinder_setup_task_common(struct task_struct *tsk)
 	INIT_LIST_HEAD(&tsk->child_create_reserves);
 	INIT_LIST_HEAD(&tsk->taps);
 
+	tsk->resource_accumulator = 0;
+	tsk->resources_used = 0;
+
+	tsk->should_debit = 1;
 	tsk->runb = 1;
 	tsk->runb_lock = __SPIN_LOCK_UNLOCKED(tsk->runb_lock);
 	init_waitqueue_head(&tsk->testwq);
@@ -837,7 +827,6 @@ asmlinkage int sys_create_reserve(char __user *name, unsigned int len)
 	/* Check parameters */
 	if (!name || len < 1)
 		return -EINVAL;
-
 	copylen = (len < CINDER_MAX_NAMELEN ? len : CINDER_MAX_NAMELEN);
 
 	ret = copy_from_user(rname, name, copylen);
@@ -1692,6 +1681,7 @@ asmlinkage long sys_feed(pid_t pid)
 	runb = target->runb;
 	thepid = task_pid_vnr(target);
 
+#if 1
 	/* Wake up queue */
 	spin_lock_irqsave(&target->testwq.lock, flags);
 	list_for_each_entry_safe(curr, next, &target->testwq.task_list, task_list) {
@@ -1705,7 +1695,7 @@ asmlinkage long sys_feed(pid_t pid)
 		after++;
 	}
 	spin_unlock_irqrestore(&target->testwq.lock, flags);
-
+#endif
 	spin_unlock(&target->runb_lock);
 
 	printk("FEED: PID is %d runb is now %d BEFORE %d AFTER %d\n", thepid, runb, before, after);

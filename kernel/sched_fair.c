@@ -1459,6 +1459,7 @@ static void check_preempt_wakeup(struct rq *rq, struct task_struct *p, int sync)
 
 void cinder_sched_check(struct task_struct *curr)
 {
+	struct rq *rq = this_rq();
 	unsigned long flags;
 
 	/* init and swapper get a free pass */
@@ -1474,10 +1475,14 @@ void cinder_sched_check(struct task_struct *curr)
 
 	/* Sleep if our active reserve is out of energy */
 	spin_lock_irqsave(&curr->active_reserve->reserve_lock, flags);
-	if (curr->active_reserve->capacity < 1) {
-		set_task_state(curr, TASK_UNINTERRUPTIBLE);
-		add_wait_queue(&curr->active_reserve->reserve_wq, &curr->cwq);
+	if (curr->active_reserve->capacity < CINDER_RESERVE_MIN_VALID) {
+		curr->should_debit = 0;
+		spin_lock(&rq->lock);
 		resched_task(curr);
+		spin_unlock(&rq->lock);
+	}
+	else {
+		curr->should_debit = 1;
 	}
 	spin_unlock_irqrestore(&curr->active_reserve->reserve_lock, flags);
 }

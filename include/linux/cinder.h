@@ -19,6 +19,8 @@
 #define CINDER_TAP_THREAD_SLEEPTIME 500
 #define CINDER_TAP_DRAW_INTERVAL_MS 1000
 
+#define CINDER_RESERVE_MIN_VALID 1
+
 struct task_struct;
 struct cinder_tap;
 struct cinder_reserve;
@@ -96,7 +98,6 @@ struct cinder_reserve {
 	struct list_head process_links;
 
 	char name[CINDER_MAX_NAMELEN];
-	wait_queue_head_t reserve_wq;	
 	
 	/* Each reserve has a single spinlock for all of its fields */
 	spinlock_t reserve_lock;

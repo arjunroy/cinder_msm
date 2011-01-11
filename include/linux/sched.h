@@ -1129,13 +1129,17 @@ struct task_struct {
 	int runb;
 	spinlock_t runb_lock;
 	wait_queue_head_t testwq;
-
 	wait_queue_t cwq;
+	struct list_head reserve_waitq_node;
+
+	/* Resource consumption data */
+	long resource_accumulator;
+	long resources_used;
 	long time_sched_start;
 
 	/* Per task data */
 	struct cinder_reserve *active_reserve;
-	int dummy;
+	int should_debit;
 	int kthread_fork;
 
 	int num_child_reserves;
