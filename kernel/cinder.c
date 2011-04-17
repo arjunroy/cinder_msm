@@ -13,6 +13,8 @@
 #include <linux/ktime.h>
 #include <linux/delay.h>
 
+//TODO: Add get_active_reserve() method
+
 struct cinder_reserve root_reserve;
 struct cinder_reserve_process_link init_root_link;
 struct cinder_reserve_process_link init_child_link;
@@ -86,10 +88,15 @@ int cinder_tap_daemon(void * unused)
 				type = tap->type;
 				rate = tap->rate;
 
+				// TODO: Sort out numerical edge cases
+				// Accumulator?
+
 				if (tap->type == CINDER_TAP_RATE_CONSTANT) {
+					// TODO: Finalize constant tap rate as being per second
 					tap->draw_amount = (tap->rate * tap_delta) / CINDER_TAP_DRAW_INTERVAL_MS;
 				}
 				else if (tap->type == CINDER_TAP_RATE_PROPORTIONAL) {
+					// TODO: Finalize proportional tap rate as being per second
 					tap->draw_amount = (total_available * tap->rate * tap_delta) / (100 * CINDER_TAP_DRAW_INTERVAL_MS);
 				}
 				else {
