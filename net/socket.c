@@ -568,6 +568,7 @@ static inline int __sock_sendmsg(struct kiocb *iocb, struct socket *sock,
 #ifdef CONFIG_UID_STAT
 	if (err > 0)
 		update_tcp_snd(current_uid(), err);
+        printk("UID %d sent %d bytes.\n", current_uid(), err);
 #endif
 	return err;
 }

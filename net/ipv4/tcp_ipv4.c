@@ -1586,7 +1586,8 @@ process:
 	if (sk_filter(sk, skb))
 		goto discard_and_relse;
 
-	skb->dev = NULL;
+    // TODO: Validate this doesn't break anything
+	//skb->dev = NULL;
 
 	bh_lock_sock_nested(sk);
 	ret = 0;

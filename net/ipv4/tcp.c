@@ -1556,6 +1556,7 @@ do_prequeue:
 			{
 				err = skb_copy_datagram_iovec(skb, offset,
 						msg->msg_iov, used);
+                printk("Copied %lu bytes Err %d PID %d TID %d UID %d iface %s\n", used, err, task_tgid_vnr(current), task_pid_vnr(current), current_uid(), skb->dev->name);
 				if (err) {
 					/* Exception. Bailout! */
 					if (!copied)
@@ -1564,6 +1565,8 @@ do_prequeue:
 				}
 			}
 		}
+
+        printk("Received %lu bytes PID %d TID %d UID %d iface %s\n", used, task_tgid_vnr(current), task_pid_vnr(current), current_uid(), skb->dev->name);
 
 		*seq += used;
 		copied += used;
