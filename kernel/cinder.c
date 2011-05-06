@@ -326,6 +326,9 @@ void cinder_setup_task_common(struct task_struct *tsk)
 	INIT_LIST_HEAD(&tsk->child_create_reserves);
 	INIT_LIST_HEAD(&tsk->taps);
 
+	tsk->network_acct_lock = __SPIN_LOCK_UNLOCKED(tsk->network_acct_lock);
+	INIT_LIST_HEAD(&tsk->network_power_acct);
+
 	tsk->resource_accumulator = 0;
 	tsk->resources_used = 0;
 
@@ -351,6 +354,8 @@ void cinder_cleanup_task(struct task_struct *tsk)
 	if (thread_group_leader(tsk) || tsk->flags & PF_KTHREAD) {
 		cinder_cleanup_reserve_links(tsk);
 	}
+
+	cinder_cleanup_tsk_netdev_acct(tsk);
 }
 
 /**

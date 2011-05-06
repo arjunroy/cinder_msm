@@ -201,7 +201,9 @@ static inline int ip_finish_output2(struct sk_buff *skb)
 		skb = skb2;
 	}
 
-    printk("Attempting packet send PID %d TID %d UID %d Packet Len %d iface %s\n", task_tgid_vnr(current), task_pid_vnr(current), current_uid(), skb->len, dev->name);
+#ifdef CONFIG_CINDER
+	netdev_note_task_send(dev, skb->len);
+#endif
 
 	if (dst->hh)
 		return neigh_hh_output(dst->hh, skb);

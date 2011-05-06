@@ -80,6 +80,8 @@ void cinder_add_reserve_to_child_list(struct cinder_reserve_process_link *link,
 void cinder_remove_reserve_from_child_lists(long reserve_id, struct task_struct *group_leader);
 int cinder_remove_reserve_from_child_list_by_id(long reserve_id, struct task_struct *tsk);
 
+int cinder_cleanup_tsk_netdev_acct(struct task_struct *tsk);
+
 /* Setup reserve links for kthreads and processes */
 int cinder_setup_child_reserves(struct task_struct *child, struct task_struct *parent);
 int cinder_setup_kthread_reserve(struct task_struct *tsk);

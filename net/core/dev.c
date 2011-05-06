@@ -127,6 +127,11 @@
 #include <linux/jhash.h>
 #include <linux/random.h>
 
+#ifdef CONFIG_CINDER
+#include <linux/reboot.h>
+#include <linux/sched.h>
+#endif
+
 #include "net-sysfs.h"
 
 /* Instead of increasing this, you should create a hash table. */
@@ -169,6 +174,10 @@
 static DEFINE_SPINLOCK(ptype_lock);
 static struct list_head ptype_base[PTYPE_HASH_SIZE] __read_mostly;
 static struct list_head ptype_all __read_mostly;	/* Taps */
+
+#ifdef CONFIG_CINDER
+struct netdev_power_registry netdev_power_reg;
+#endif
 
 /*
  * The @dev_base_head list is protected by @dev_base_lock and the rtnl
@@ -4736,6 +4745,10 @@ struct net_device *alloc_netdev_mq(int sizeof_priv, const char *name,
 
 	dev->gso_max_size = GSO_MAX_SIZE;
 
+#ifdef CONFIG_CINDER
+	dev->power_acct_data = NULL;
+#endif
+
 	netdev_init_queues(dev);
 
 	INIT_LIST_HEAD(&dev->napi_list);
@@ -5225,11 +5238,645 @@ static int __init net_dev_init(void)
 	dst_init();
 	dev_mcast_init();
 	rc = 0;
+
+#ifdef CONFIG_CINDER
+	__netdev_power_registry_init(&netdev_power_reg);
+#endif
+
 out:
 	return rc;
 }
 
 subsys_initcall(net_dev_init);
+
+#ifdef CONFIG_CINDER
+
+static int
+__netdev_shutdown_notifier_call(struct notifier_block *blk,
+	unsigned long event, void *data)
+{
+	switch (event) {
+		case SYS_RESTART:
+		case SYS_HALT:
+		case SYS_POWER_OFF:
+			__netdev_power_registry_cleanup(&netdev_power_reg);
+			break;
+		default:
+			return NOTIFY_OK;
+	}
+	return NOTIFY_OK;
+}
+
+static struct notifier_block netdev_acct_notifier = {
+	.notifier_call = __netdev_shutdown_notifier_call,
+	.priority = 0
+};
+
+static int
+__netdev_state_change_call(struct notifier_block *blk, unsigned long event,
+	void *data)
+{
+	struct net_device *dev;
+	struct netdev_power_registry *registry = &netdev_power_reg;
+	struct netdev_power_acct_data *dev_data = NULL, *curr_data;
+	struct timespec now;
+
+	//BUG_ON(!data);
+	if (!data)
+		return NOTIFY_OK;
+
+	/* Initialize */
+	dev = (struct net_device *) data;
+	ktime_get_ts(&now);
+
+	printk("Netdev state change: Dev %p "
+		"Device MAC %02x:%02x:%02x:%02x:%02x:%02x\n", dev, dev->dev_addr[0],
+		dev->dev_addr[1], dev->dev_addr[2], dev->dev_addr[3], dev->dev_addr[4],
+		dev->dev_addr[5]);
+	if (event == NETDEV_UP)
+		printk("Device is now active\n");
+	else if (event == NETDEV_DOWN)
+		printk("Device is now inactive\n");
+	else
+		printk("Other state change.\n");
+
+	/* Lock registry */
+	spin_lock(&registry->registry_lock);
+
+	/* If registry closed, no further action */
+	if (!registry->active) {
+		spin_unlock(&registry->registry_lock);
+		return NOTIFY_OK;
+	}
+
+	/* Look for device in registry */
+	list_for_each_entry(curr_data, &registry->device_data, list) {
+		if (curr_data->dev == dev) {
+			dev_data = curr_data;
+			goto found;
+		}
+	}
+
+found:
+	/* If device was not found, we're done */
+	if (!dev_data) {
+		spin_unlock(&registry->registry_lock);
+		printk("Device %s was not found in registry.\n", dev->name);
+		return NOTIFY_OK;
+	}
+
+	/* Lock device data */
+	spin_lock(&dev_data->usage_lock);
+
+	/* Set state for device */
+	switch (event) {
+		case NETDEV_UP:
+			dev_data->drawing_power = 1;
+			break;
+		case NETDEV_DOWN:
+			dev_data->drawing_power = 0;
+			break;
+		default:
+			goto out;
+	}
+
+	/* Note time for device state change and unlock device data */
+	memcpy(&dev_data->time_last_state_change, &now, sizeof(struct timespec));
+
+out:
+	/* Unlock device data */
+	spin_unlock(&dev_data->usage_lock);
+
+	/* Unlock registry and we're done */
+	spin_unlock(&registry->registry_lock);
+	printk("Done with netdev state change notification\n");
+	return NOTIFY_OK;
+}
+
+static struct notifier_block netdev_state_change_notifier = {
+	.notifier_call = __netdev_state_change_call,
+	.priority = 0
+};
+
+/*
+ * __netdev_power_registry_init(registry)
+ *
+ * Initializes the network device power accounting registry. Called at boot time
+ * so no locks are taken. Notice that tearing down the registry at reboot time
+ * or shutdown will require taking locks.
+ */
+void
+__netdev_power_registry_init(struct netdev_power_registry *registry)
+{
+	BUG_ON(!registry);
+
+	registry->registry_lock = __SPIN_LOCK_UNLOCKED(registry->registry_lock);
+	INIT_LIST_HEAD(&registry->device_data);
+	registry->active = 1;
+
+	/* Sign up for notifications */
+	register_reboot_notifier(&netdev_acct_notifier);
+	register_netdevice_notifier(&netdev_state_change_notifier);
+}
+
+/*
+ * __netdev_power_registry_cleanup(registry)
+ *
+ * Cleans up network device power accounting registry. Called when shutting down
+ * and disables registry so that it can continue without holding lock. Releases
+ * reference to all device specific power accounting data, which frees it if it
+ * was the last reference. If not, one of the tasks holding the reference will
+ * free it as every task is killed.
+ */
+void
+__netdev_power_registry_cleanup(struct netdev_power_registry *registry)
+{
+	struct netdev_power_acct_data *dev_data, *tmp;
+
+	BUG_ON(!registry);
+
+	/* Mark as deactivated. After this, no devices can register with us, and
+       no intents can be added to us. This means we can do the rest without
+	   using the registry lock. */
+	spin_lock(&registry->registry_lock);
+	registry->active = 0;
+	spin_unlock(&registry->registry_lock);
+
+	/* Clean up power accounting data for each registered device */
+	list_for_each_entry_safe(dev_data, tmp, &registry->device_data, list) {
+		list_del(&dev_data->list);
+		__put_netdev_power_acct_data(dev_data);
+	}
+}
+
+/*
+ * __alloc_netdev_power_acct_data(dev, idle_power_draw, active_power_draw)
+ *
+ * Allocates netdev power accounting structure for the given device, with the
+ * given parameters. Reference count is set to 1 (the netdev power registry's
+ * reference).
+ */
+static struct netdev_power_acct_data *
+__alloc_netdev_power_acct_data(struct net_device *dev,
+	long idle_power_draw, long idle_draw_ms_interval, 
+	long send_power_draw, long send_draw_byte_interval, 
+	long rcv_power_draw, long rcv_draw_byte_interval)
+{
+	struct netdev_power_acct_data *data = NULL;
+
+	if (!dev || idle_power_draw < 0 || send_power_draw < 0 || 
+		rcv_power_draw < 0 || send_draw_byte_interval < 0 || 
+		rcv_draw_byte_interval < 0 || idle_draw_ms_interval < 0)
+		return ERR_PTR(-EINVAL);
+
+	data = kzalloc(sizeof(*data), GFP_KERNEL);
+	if (!data)
+		return ERR_PTR(-ENOMEM);
+
+	data->usage_lock = __SPIN_LOCK_UNLOCKED(data->usage_lock);
+
+	data->energy_used_total = 0;
+	data->energy_used_idle = 0;
+	data->energy_used_active = 0;
+
+	ktime_get_ts(&data->time_last_state_change);
+	data->drawing_power = 0;
+
+	data->idle_power_draw = idle_power_draw;
+	data->idle_draw_ms_interval = idle_draw_ms_interval;
+	data->send_power_draw = send_power_draw; 
+	data->send_draw_byte_interval = send_draw_byte_interval; 
+	data->rcv_power_draw = rcv_power_draw;
+	data->rcv_draw_byte_interval = rcv_draw_byte_interval;
+
+	INIT_LIST_HEAD(&data->per_task_acct);
+
+	data->dev = dev;
+
+	/* Set up our key information */
+	data->addr_len = dev->addr_len;
+	memcpy(data->dev_addr, dev->dev_addr, dev->addr_len);
+
+	/* Two references: one by the registry, one by the driver */
+	atomic_set(&data->refcnt, 2);
+
+	return data;
+}
+
+/*
+ * __add_netdev_to_power_acct_registry(dev, idle_power_draw, active_power_draw)
+ *
+ * Find device data in network power accounting registry and associate device
+ * with accounting data, or allocate new entry and associate.
+ *
+ * Returns an error if:
+ * - Invalid device or power draw values (-EINVAL)
+ * - A device is already registered. (-EEXIST)
+ * - Cannot allocate memory for device entry. (-ENOMEM)
+ * - Registry is not active (-EBUSY)
+ */
+int __find_or_add_netdev_to_power_acct_registry(struct net_device *dev,
+	long idle_power_draw, long idle_draw_ms_interval, 
+	long send_power_draw, long send_draw_byte_interval, 
+	long rcv_power_draw, long rcv_draw_byte_interval)
+{
+	int i, ret, cmp;
+	struct netdev_power_acct_data *entry = NULL, *curr_data;
+
+	/* Input validation. */
+	if (!dev || idle_power_draw < 0 || send_power_draw < 0 || 
+		rcv_power_draw < 0 || send_draw_byte_interval < 0 || 
+		rcv_draw_byte_interval < 0 || idle_draw_ms_interval < 0)
+		return -EINVAL;
+
+	/* Prealloc new entry. */
+	entry = __alloc_netdev_power_acct_data(dev, idle_power_draw, 
+		idle_draw_ms_interval, send_power_draw, send_draw_byte_interval, 
+		rcv_power_draw, rcv_draw_byte_interval);
+	if (IS_ERR(entry))
+		return PTR_ERR(entry);
+
+	/* Lock registry. */
+	spin_lock(&netdev_power_reg.registry_lock);
+
+	/* If in the middle of shutting down, fail the request */
+	if (!netdev_power_reg.active) {
+		spin_unlock(&netdev_power_reg.registry_lock);
+		__put_netdev_power_acct_data(entry);
+		return -EBUSY;
+	}
+
+	printk("Add netdev to power_reg: Searching for device in reg with MAC"
+			" %02x:%02x:%02x:%02x:%02x:%02x\n", dev->dev_addr[0],
+			dev->dev_addr[1], dev->dev_addr[2], dev->dev_addr[3],
+			dev->dev_addr[4], dev->dev_addr[5]);
+	/* Search for existing entry */
+	list_for_each_entry(curr_data, &netdev_power_reg.device_data, list) {
+
+		if (curr_data->addr_len != dev->addr_len)
+			continue;
+
+		/* Compare hardware addr */
+		cmp = 1;
+		for (i = 0; i < dev->addr_len; i++) {
+			if (dev->dev_addr[i] != curr_data->dev_addr[i]) {
+				cmp = 0;
+				break;
+			}
+		}
+		if (cmp == 1) {
+			/* Found matching entry. Free new entry, set found entry
+			   to be the one we work with. */
+			__put_netdev_power_acct_data(entry);
+			entry = curr_data;
+			printk("Reusing old entry.\n");
+			goto found_match;
+		}
+	}
+
+	printk("Adding new entry.\n");
+
+	/* No matching entry. Add new entry to our list and return. */
+	dev->power_acct_data = entry;
+	list_add(&entry->list, &netdev_power_reg.device_data);
+	spin_unlock(&netdev_power_reg.registry_lock);
+	return 0;
+
+found_match:
+	/* If entry has device set to the given device, we're done. */
+	spin_lock(&entry->usage_lock);
+	if (!entry->dev) {
+		entry->dev = dev;
+		dev->power_acct_data = entry;
+
+		/* Device driver takes a ref */
+		atomic_inc(&entry->refcnt);
+		ret = 0;
+	}
+	else {
+		ret = -EEXIST;
+	}
+	spin_unlock(&entry->usage_lock);
+	spin_unlock(&netdev_power_reg.registry_lock);
+	return ret;
+}
+
+/*
+ * __disassociate_netdev_from_power_acct_registry(dev)
+ *
+ * Disassociate device from network power accounting registry. This is done when
+ * the device driver for the device is unloading, or if the struct net_device
+ * is otherwise invalid. The device specific accounting data is left intact, as
+ * is any per task accounting data for the device that might have been recorded.
+ *
+ * Returns an error if:
+ * - Invalid device (-EINVAL)
+ * - Device not in registry (-ENOENT)
+ */
+int
+__disassociate_netdev_from_power_acct_registry(struct net_device *dev)
+{
+	int i, ret, cmp;
+	struct netdev_power_acct_data *curr_data;
+
+	/* Input validation. */
+	BUG_ON(!dev);
+	if (!dev)
+		return -EINVAL;
+
+	/* Lock registry. */
+	spin_lock(&netdev_power_reg.registry_lock);
+
+	/* If in the middle of shutting down, consider as successful. */
+	if (!netdev_power_reg.active) {
+		spin_unlock(&netdev_power_reg.registry_lock);
+		return 0;
+	}
+
+	printk("Remove netdev from power_reg: Searching for device in reg with MAC"
+			" %02x:%02x:%02x:%02x:%02x:%02x\n", dev->dev_addr[0],
+			dev->dev_addr[1], dev->dev_addr[2], dev->dev_addr[3],
+			dev->dev_addr[4], dev->dev_addr[5]);
+	/* Look for device entry */
+	list_for_each_entry(curr_data, &netdev_power_reg.device_data, list) {
+
+		/* Lock current entry */
+		spin_lock(&curr_data->usage_lock);
+
+		if (curr_data->addr_len != dev->addr_len) {
+			/* Unlock current entry before continuing */
+			spin_unlock(&curr_data->usage_lock);
+			continue;
+		}
+
+		/* Compare hardware addr */
+		cmp = 1;
+		for (i = 0; i < dev->addr_len; i++) {
+			if (dev->dev_addr[i] != curr_data->dev_addr[i]) {
+				cmp = 0;
+				break;
+			}
+		}
+		if (cmp == 1) {
+			/* Found matching entry. Check to see if device matches. */
+
+			if (curr_data->dev == dev) {
+				/* Device does match */
+				curr_data->dev = NULL;
+				dev->power_acct_data = NULL;
+
+				/* Note that device is off. */
+				if (curr_data->drawing_power) {
+					ktime_get_ts(&curr_data->time_last_state_change);
+					curr_data->drawing_power = 0;
+				}
+
+				/* Unlock before putting reference in case it was last ref */
+				spin_unlock(&curr_data->usage_lock);
+
+				/* Device driver lets go of its ref */
+				__put_netdev_power_acct_data(curr_data);
+				ret = 0;
+				//printk("Found device, removed from reg but keeping old entry around.\n");
+			}
+			else {
+				spin_unlock(&curr_data->usage_lock);
+				//printk("Did not find correct device though MAC matched, no op.\n");
+				ret = -ENOENT;
+			}
+
+			spin_unlock(&netdev_power_reg.registry_lock);
+			return ret;
+		}
+
+		/* Unlock current entry before continuing */
+		spin_unlock(&curr_data->usage_lock);
+	}
+
+	// Found no matching entries
+	spin_unlock(&netdev_power_reg.registry_lock);
+	printk("Found not matching entry for removal from netdev reg.\n");
+	return -ENOENT;
+}
+
+struct netdev_power_acct_data *
+__get_netdev_power_acct_data(struct net_device *dev)
+{
+	int i, cmp;
+	struct netdev_power_acct_data *curr_data;
+
+	/* Input validation. */
+	BUG_ON(!dev);
+	if (!dev)
+		return ERR_PTR(-EINVAL);
+
+	/* Lock registry. */
+	spin_lock(&netdev_power_reg.registry_lock);
+
+	/* If in the middle of shutting down, return. */
+	if (!netdev_power_reg.active) {
+		spin_unlock(&netdev_power_reg.registry_lock);
+		return NULL;
+	}
+
+	/* Look for device entry */
+	list_for_each_entry(curr_data, &netdev_power_reg.device_data, list) {
+
+		if (curr_data->addr_len != dev->addr_len)
+			continue;
+
+		/* Compare hardware addr */
+		cmp = 1;
+		for (i = 0; i < dev->addr_len; i++) {
+			if (dev->dev_addr[i] != curr_data->dev_addr[i]) {
+				cmp = 0;
+				break;
+			}
+		}
+		if (cmp == 1) {
+			/* Found matching entry. Bump refcnt and return. */
+			atomic_inc(&curr_data->refcnt);
+			spin_unlock(&netdev_power_reg.registry_lock);
+			return curr_data;
+		}
+	}
+
+	/* Entry not found */
+	spin_unlock(&netdev_power_reg.registry_lock);
+	return NULL;
+}
+
+static void
+__do_put_netdev_power_acct_data(struct netdev_power_acct_data *data)
+{
+	kfree(data);
+}
+
+void
+__put_netdev_power_acct_data(struct netdev_power_acct_data *data)
+{
+	BUG_ON(!data);
+
+	if (!atomic_dec_return(&data->refcnt))
+		__do_put_netdev_power_acct_data(data);
+}
+
+static struct netdev_per_task_acct_data *
+__allocate_netdev_task_acct_data(struct netdev_power_acct_data *dev_data, struct task_struct *tsk)
+{
+	struct netdev_per_task_acct_data *data = NULL;
+
+	data = kmalloc(sizeof(*data), GFP_KERNEL);
+	if (!data)
+		return NULL;
+
+	data->dev_acct_data = dev_data;
+	data->lock = __SPIN_LOCK_UNLOCKED(data->lock);
+
+	data->time_ms_unaccounted = 0;
+	data->sent_bytes_unaccounted = 0;
+	data->rcvd_bytes_unaccounted = 0;
+
+	data->energy_used_total = 0;
+	data->energy_used_idle = 0;
+	data->energy_used_active = 0;
+
+	return data;
+}
+
+static int
+__netdev_note_task_traffic(struct net_device *dev, unsigned int len, int send)
+{
+	struct task_struct *tsk;
+	struct netdev_power_acct_data *dev_data;
+	struct netdev_per_task_acct_data *intent = NULL, *curr_intent;
+
+	tsk = current;
+
+	if (!tsk || !dev)
+		return -EINVAL;
+
+	dev_data = __get_netdev_power_acct_data(dev);
+	if (!dev_data) /* If no device data we don't have to do anything */
+		return 0;
+
+	/* Lock list of task network data */
+	spin_lock(&tsk->network_acct_lock);
+
+	/* Search for intent */
+	list_for_each_entry(curr_intent, &tsk->network_power_acct, task_list_link) {
+		if (curr_intent->dev_acct_data == dev_data) { /* Found intent */
+			intent = curr_intent;
+			__put_netdev_power_acct_data(dev_data); /* put unnecessary ref */
+			goto got_intent;
+		}
+	}
+
+	/* Unlock list of task network data in preparation for alloc */
+	spin_unlock(&tsk->network_acct_lock);
+
+	/* Need to allocate new intent */
+	printk("Pkt send: Allocating new intent for TID %d DEV %s\n", task_pid_vnr(tsk), dev->name);
+	intent = __allocate_netdev_task_acct_data(dev_data, tsk);
+	if (!intent) {
+		__put_netdev_power_acct_data(dev_data);
+		return -ENOMEM;
+	}
+
+	/* Add to per device accounting list. Needs lock */
+	spin_lock(&dev_data->usage_lock);
+	list_add(&intent->dev_list_link, &dev_data->per_task_acct);
+	spin_unlock(&dev_data->usage_lock);
+
+	/* Add to task's list of intents. */
+	spin_lock(&tsk->network_acct_lock);
+	list_add(&intent->task_list_link, &tsk->network_power_acct);
+
+got_intent:
+	/* intent is linked in both per device stats and in task. Increment usage */
+	spin_lock(&intent->lock);
+	if (send)
+		intent->sent_bytes_unaccounted += len;
+	else
+		intent->rcvd_bytes_unaccounted += len;
+	spin_unlock(&intent->lock);
+
+	/* Unlock list of task network data */
+	spin_unlock(&tsk->network_acct_lock);
+
+    printk("Attempting packet %s PID %d TID %d Packet Len %d iface %s\n",
+		(send ? "send" : "receive"), task_tgid_vnr(tsk), task_pid_vnr(tsk),
+		len, dev->name);
+	return 0;
+}
+
+int 
+netdev_note_task_send(struct net_device *dev, unsigned int len)
+{
+	return __netdev_note_task_traffic(dev, len, 1);
+}
+
+int
+netdev_note_task_rcv(struct net_device *dev, unsigned int len)
+{
+	return __netdev_note_task_traffic(dev, len, 0);
+}
+
+static int
+__cleanup_netdev_task_acct_data(struct netdev_per_task_acct_data * tsk_dev_acct)
+{
+	struct netdev_power_acct_data *dev_data;
+	dev_data = tsk_dev_acct->dev_acct_data;
+
+	/* Remove intent from device's list */
+	spin_lock(&dev_data->usage_lock);
+	list_del(&tsk_dev_acct->dev_list_link);
+	spin_unlock(&dev_data->usage_lock);
+
+	/* Put our reference to device, and free */
+	__put_netdev_power_acct_data(dev_data);
+	kfree(tsk_dev_acct);
+	return 0;
+}
+
+int
+cinder_cleanup_tsk_netdev_acct(struct task_struct *tsk)
+{
+	struct netdev_per_task_acct_data *tsk_dev_acct, *tmp;
+	struct list_head removal_list;
+
+	BUG_ON(!tsk);
+	if (!tsk)
+		return -EINVAL;
+
+	INIT_LIST_HEAD(&removal_list);
+
+	spin_lock(&tsk->network_acct_lock);
+
+	/* Unhook from task, move intents to removal list */
+	list_for_each_entry_safe(tsk_dev_acct, tmp, &tsk->network_power_acct,
+		task_list_link) {
+		list_del(&tsk_dev_acct->task_list_link);
+		list_add(&tsk_dev_acct->task_list_link, &removal_list);
+	}
+
+	spin_unlock(&tsk->network_acct_lock);
+
+	/* Cleanup intents */
+	list_for_each_entry_safe(tsk_dev_acct, tmp, &removal_list,
+		task_list_link) {
+		__cleanup_netdev_task_acct_data(tsk_dev_acct);
+	}
+
+	return 0;
+}
+
+EXPORT_SYMBOL(__find_or_add_netdev_to_power_acct_registry);
+EXPORT_SYMBOL(__disassociate_netdev_from_power_acct_registry);
+EXPORT_SYMBOL(__get_netdev_power_acct_data);
+EXPORT_SYMBOL(__put_netdev_power_acct_data);
+
+#endif /* CONFIG_CINDER */
 
 EXPORT_SYMBOL(__dev_get_by_index);
 EXPORT_SYMBOL(__dev_get_by_name);

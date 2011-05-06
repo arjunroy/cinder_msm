@@ -584,6 +584,10 @@ struct net_device_ops {
 #endif
 };
 
+#ifdef CONFIG_CINDER
+struct netdev_power_acct_data; /* Forward declaration for per dev accounting */
+#endif
+
 /*
  *	The DEVICE structure.
  *	Actually, this whole structure is a big mistake.  It mixes I/O
@@ -877,6 +881,12 @@ struct net_device
 #endif
 	};
 #endif
+
+
+#ifdef CONFIG_CINDER
+	struct netdev_power_acct_data *power_acct_data;
+#endif
+
 };
 #define to_net_dev(d) container_of(d, struct net_device, dev)
 
@@ -1894,6 +1904,87 @@ static inline int skb_bond_should_drop(struct sk_buff *skb)
 }
 
 extern struct pernet_operations __net_initdata loopback_net_ops;
+
+#ifdef CONFIG_CINDER
+
+struct netdev_power_registry {
+
+	spinlock_t registry_lock;
+	struct list_head device_data;
+	int active;
+
+};
+
+struct netdev_power_acct_data {
+	struct net_device *dev; /* Can be NULL if device disabled/removed */
+
+	unsigned char dev_addr[MAX_ADDR_LEN];
+	unsigned char addr_len;
+
+	spinlock_t usage_lock;
+
+	long energy_used_total;
+	long energy_used_idle;
+	long energy_used_active;
+
+	struct timespec time_last_state_change;
+	int drawing_power;
+
+	/* Draw expressed as charge over time. TODO: Units */
+	long idle_power_draw; 
+	long idle_draw_ms_interval; 
+	long send_power_draw; 
+	long send_draw_byte_interval;
+	long rcv_power_draw; 
+	long rcv_draw_byte_interval;
+
+	struct list_head per_task_acct; /* Task 'intents' */
+	struct list_head list; /* Linkage in registry */
+
+	atomic_t refcnt;
+};
+
+struct netdev_per_task_acct_data {
+	/* Represents an 'intent' for a task to use a given netdev */
+	struct netdev_power_acct_data *dev_acct_data;
+
+	spinlock_t lock;
+	long time_ms_unaccounted;
+	long sent_bytes_unaccounted;
+	long rcvd_bytes_unaccounted;
+
+	/* Statistics */
+	long energy_used_total;
+	long energy_used_idle;
+	long energy_used_active;
+
+	struct list_head task_list_link;
+	struct list_head dev_list_link;
+};
+
+void __netdev_power_registry_init(struct netdev_power_registry *registry);
+void __netdev_power_registry_cleanup(struct netdev_power_registry *registry);
+
+/* Add network device to accounting registry */
+int __find_or_add_netdev_to_power_acct_registry(struct net_device *dev,
+	long idle_power_draw, long idle_draw_ms_interval, 
+	long send_power_draw, long send_draw_byte_interval, 
+	long rcv_power_draw, long rcv_draw_byte_interval);
+
+/* Disassociate device from network device power accounting data */
+int __disassociate_netdev_from_power_acct_registry(struct net_device *dev);
+
+/* Get reference to network device power accounting data, if it exists. */
+struct netdev_power_acct_data * __get_netdev_power_acct_data(struct net_device *dev);
+
+/* Discard reference to network device power accounting data */
+void __put_netdev_power_acct_data(struct netdev_power_acct_data *data);
+
+int netdev_note_task_send(struct net_device *dev, unsigned int len);
+int netdev_note_task_rcv(struct net_device *dev, unsigned int len);
+
+#endif
+
 #endif /* __KERNEL__ */
 
 #endif	/* _LINUX_DEV_H */

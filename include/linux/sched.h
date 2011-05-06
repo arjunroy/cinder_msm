@@ -1153,6 +1153,9 @@ struct task_struct {
 
 	int num_taps;
 	struct list_head taps; /* All taps we created */
+
+	spinlock_t network_acct_lock;
+	struct list_head network_power_acct;
 #endif
 
 #ifdef CONFIG_SMP

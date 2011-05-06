@@ -76,6 +76,7 @@
 
 #ifdef CONFIG_CINDER
 #include <linux/cinder.h>
+#include <linux/netdevice.h>
 #endif
 
 #include <asm/tlb.h>
@@ -4593,6 +4594,114 @@ pick_next_task(struct rq *rq, struct task_struct *prev)
 	}
 }
 
+#ifdef CONFIG_CINDER
+
+static long
+__account_task_netdev_usage(struct task_struct *tsk, 
+	struct netdev_per_task_acct_data *netdev_usage, long current_ms)
+{
+	struct netdev_power_acct_data *dev_data;
+	long time_last_state_change;
+	int drawing_power;
+
+	long idle_power_draw, idle_draw_ms_interval; 
+	long send_power_draw, send_draw_byte_interval;
+	long rcv_power_draw, rcv_draw_byte_interval;
+
+	long debit_amount = 0;
+
+	dev_data = netdev_usage->dev_acct_data;
+
+	/* Lock per device data, copy relevant data and unlock */
+	spin_lock(&dev_data->usage_lock);
+
+	/* Idle draw */
+	idle_power_draw = dev_data->idle_power_draw;
+	idle_draw_ms_interval = dev_data->idle_draw_ms_interval; 
+
+	/* Send packets draw */
+	send_power_draw = dev_data->send_power_draw; 
+	send_draw_byte_interval = dev_data->send_draw_byte_interval;
+
+	/* Rcv packets draw */
+	rcv_power_draw = dev_data->rcv_power_draw; 
+	rcv_draw_byte_interval = dev_data->rcv_draw_byte_interval;
+
+	/* Is device on, and when was state last changed? */
+	drawing_power = dev_data->drawing_power;
+	time_last_state_change = timespec_to_ms(&dev_data->time_last_state_change);
+	memcpy(&time_last_state_change, &dev_data->time_last_state_change, sizeof(time_last_state_change));
+
+	spin_unlock(&dev_data->usage_lock);
+	
+	/* Account for bytes sent */
+	if (netdev_usage->sent_bytes_unaccounted > send_draw_byte_interval) {
+		long remainder = netdev_usage->sent_bytes_unaccounted % send_draw_byte_interval;
+		long debit_bytes = netdev_usage->sent_bytes_unaccounted - remainder;
+		netdev_usage->sent_bytes_unaccounted -= debit_bytes;
+		debit_amount += (debit_bytes / send_draw_byte_interval) * send_power_draw;
+	}
+
+	/* Accounting for bytes received */
+	if (netdev_usage->rcvd_bytes_unaccounted > rcv_draw_byte_interval) {
+		long remainder = netdev_usage->rcvd_bytes_unaccounted % rcv_draw_byte_interval;
+		long debit_bytes = netdev_usage->rcvd_bytes_unaccounted - remainder;
+		netdev_usage->rcvd_bytes_unaccounted -= debit_bytes;
+		debit_amount += (debit_bytes / rcv_draw_byte_interval) * rcv_power_draw;
+	}
+
+	/* Account for device idle time (activation cost) */
+	if (!drawing_power) { 	/* If device off */
+		if (tsk->time_sched_start < time_last_state_change) {
+			/* Turned off while task was running */
+
+			/* How long did device run, within current time slice of task? */
+			long delta_time = time_last_state_change - tsk->time_sched_start;
+			
+			netdev_usage->time_ms_unaccounted += delta_time;
+			if (netdev_usage->time_ms_unaccounted > idle_draw_ms_interval) {
+				long remainder = netdev_usage->time_ms_unaccounted % idle_draw_ms_interval;
+				long debit_time = netdev_usage->time_ms_unaccounted - remainder;
+				netdev_usage->time_ms_unaccounted -= debit_time;
+				debit_amount += (debit_time / idle_draw_ms_interval) * idle_power_draw;
+			}
+		}
+	}
+	else { /* Device active */
+		if (time_last_state_change < tsk->time_sched_start) {
+			long delta_time = current_ms - tsk->time_sched_start;
+			netdev_usage->time_ms_unaccounted += delta_time;
+		}
+		else {
+			long delta_time = current_ms - time_last_state_change;
+			netdev_usage->time_ms_unaccounted += delta_time;
+		}
+
+		if (netdev_usage->time_ms_unaccounted > idle_draw_ms_interval) {
+			long remainder = netdev_usage->time_ms_unaccounted % idle_draw_ms_interval;
+			long debit_time = netdev_usage->time_ms_unaccounted - remainder;
+			netdev_usage->time_ms_unaccounted -= debit_time;
+			debit_amount += (debit_time / idle_draw_ms_interval) * idle_power_draw;
+		}
+	}
+	return debit_amount;
+}
+
+static long
+__account_task_network_usage(struct task_struct *tsk, long current_ms)
+{
+	long debit_amount = 0;
+	struct netdev_per_task_acct_data *netdev_usage;
+	
+	list_for_each_entry(netdev_usage, &tsk->network_power_acct, task_list_link) {
+		debit_amount += __account_task_netdev_usage(tsk, netdev_usage, current_ms);
+	}
+
+	return debit_amount;
+}
+
+#endif
+
 /*
  * schedule() is the main scheduler function.
  */
@@ -4659,6 +4768,8 @@ need_resched_nonpreemptible:
 		debit_amount = accounting_amount / 1000;
 		prev->resources_used += debit_amount;
 
+		debit_amount += __account_task_network_usage(prev, current_ms);
+		
 		spin_lock(&prev->active_reserve->reserve_lock);
 		prev->active_reserve->capacity -= debit_amount;
 		spin_unlock(&prev->active_reserve->reserve_lock);
