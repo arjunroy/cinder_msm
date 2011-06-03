@@ -154,6 +154,8 @@ struct reserve_info {
 	int id;
 	long capacity;
 	char name[CINDER_MAX_NAMELEN];
+
+	int num_users;
 	
 	/* TODO: Implement # taps */
 	int num_process_taps;

@@ -370,6 +370,7 @@
 		CALL(sys_dup3)
 		CALL(sys_pipe2)
 /* 360 */	CALL(sys_inotify_init1)
+#ifdef CONFIG_CINDER
 		CALL(sys_create_reserve)
 		CALL(sys_create_tap)
 		CALL(sys_reserve_transfer)
@@ -392,6 +393,8 @@
 /* 380 */ 	CALL(sys_num_child_list_reserves)
 		CALL(sys_get_child_list_reserve)
 		CALL(sys_delete_tap)
+		CALL(sys_root_reserve_id)
+#endif
 
 #ifndef syscalls_counted
 .equ syscalls_padding, ((NR_syscalls + 3) & ~3) - NR_syscalls

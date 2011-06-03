@@ -694,6 +694,7 @@ asmlinkage long sys_ppoll(struct pollfd __user *, unsigned int,
 asmlinkage long sys_pipe2(int __user *, int);
 asmlinkage long sys_pipe(int __user *);
 
+#ifdef CONFIG_CINDER
 /* Cinder syscalls */
 asmlinkage int sys_create_reserve(char __user *, int);
 asmlinkage long sys_put_reserve(int);
@@ -729,6 +730,8 @@ asmlinkage long sys_add_reserve_to_child_list(int, unsigned int);
 asmlinkage long sys_del_reserve_from_child_list(int);
 asmlinkage long sys_num_child_list_reserves(void);
 asmlinkage int sys_get_child_list_reserve(long);
+asmlinkage int sys_root_reserve_id(void);
+#endif
 
 int kernel_execve(const char *filename, char *const argv[], char *const envp[]);
 

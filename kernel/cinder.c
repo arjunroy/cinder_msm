@@ -1095,6 +1095,7 @@ asmlinkage long sys_reserve_info(int reserve_id, struct reserve_info __user *inf
 	reserve = link->reserve;
 
 	/* Get reserve data */
+	kinfo.num_users = atomic_read(&reserve->refcount);
 	kinfo.id = reserve->id;
 	kinfo.num_process_taps = 0;
 	memcpy(kinfo.name, reserve->name, sizeof(reserve->name));
@@ -1832,6 +1833,11 @@ asmlinkage int sys_get_child_list_reserve(long index)
 	up(&group_leader->cinder_lock);
 
 	return reserve_id;
+}
+
+asmlinkage int sys_root_reserve_id()
+{
+	return root_reserve.id; // No need to lock, this is constant
 }
 
 #endif /* ifdef CONFIG_CINDER */

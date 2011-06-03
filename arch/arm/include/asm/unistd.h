@@ -387,6 +387,9 @@
 #define __NR_dup3			(__NR_SYSCALL_BASE+358)
 #define __NR_pipe2			(__NR_SYSCALL_BASE+359)
 #define __NR_inotify_init1		(__NR_SYSCALL_BASE+360)
+
+#ifdef CONFIG_CINDER
+
 #define __NR_create_reserve		(__NR_SYSCALL_BASE+361)
 #define __NR_create_tap			(__NR_SYSCALL_BASE+362)
 #define __NR_reserve_transfer		(__NR_SYSCALL_BASE+363)
@@ -409,6 +412,9 @@
 #define __NR_num_child_list_reserves	(__NR_SYSCALL_BASE+380)
 #define __NR_get_child_list_reserve	(__NR_SYSCALL_BASE+381)
 #define __NR_delete_tap			(__NR_SYSCALL_BASE+382)
+#define __NR_root_reserve_id			(__NR_SYSCALL_BASE+383)
+
+#endif
 
 /*
  * The following SWIs are ARM private.
