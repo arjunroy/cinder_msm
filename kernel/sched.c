@@ -4772,6 +4772,7 @@ need_resched_nonpreemptible:
 		
 		spin_lock(&prev->active_reserve->reserve_lock);
 		prev->active_reserve->capacity -= debit_amount;
+		prev->active_reserve->lifetime_usage += debit_amount;
 		spin_unlock(&prev->active_reserve->reserve_lock);
 	}
 #endif

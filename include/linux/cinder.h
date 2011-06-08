@@ -92,7 +92,7 @@ int cinder_tap_daemon(void * unused);
 struct cinder_reserve {
 	int id;
 
-	long capacity;
+	long capacity, lifetime_input, lifetime_usage;
 	struct list_head taps_to;
 	struct list_head taps_from;
 
@@ -152,7 +152,7 @@ struct cinder_tap {
 
 struct reserve_info {
 	int id;
-	long capacity;
+	long capacity, lifetime_input, lifetime_usage;
 	char name[CINDER_MAX_NAMELEN];
 
 	int num_users;

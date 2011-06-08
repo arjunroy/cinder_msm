@@ -132,6 +132,7 @@ int cinder_tap_daemon(void * unused)
 						debit_amount = tap->draw_amount;
 					}
 					src_reserve->capacity -= debit_amount;
+					src_reserve->lifetime_usage += debit_amount;
 
 					/* Add to staging area for dest reserve. Note
 		                           no further locking required here since we 
@@ -151,6 +152,7 @@ int cinder_tap_daemon(void * unused)
 			spin_lock(&dest_reserve->reserve_lock);
 			prev_capacity = dest_reserve->capacity;
 			dest_reserve->capacity += dest_reserve->value_to_add;
+			dest_reserve->lifetime_input += dest_reserve->value_to_add;
 			dest_reserve->value_to_add = 0;
 			spin_unlock(&dest_reserve->reserve_lock);
 		}
@@ -252,6 +254,8 @@ int cinder_setup_reserve(struct cinder_reserve *reserve, const char *name)
 
 	reserve->id = id;	
 	reserve->capacity = 0;
+	reserve->lifetime_input = 0;
+	reserve->lifetime_usage = 0;
 	reserve->value_to_add = 0; /* For taps thread */
 
 	INIT_LIST_HEAD(&reserve->taps_to);
@@ -291,6 +295,7 @@ void cinder_cleanup_reserve(struct cinder_reserve *reserve)
 	if (spare_capacity) {
 		spin_lock(&root_reserve.reserve_lock);
 		root_reserve.capacity += spare_capacity;
+		root_reserve.lifetime_input += spare_capacity;
 		spin_unlock(&root_reserve.reserve_lock);
 	}
 
@@ -1103,6 +1108,9 @@ asmlinkage long sys_reserve_info(int reserve_id, struct reserve_info __user *inf
 	/* Need lock for reserve capacity and number of taps */	
 	spin_lock(&reserve->reserve_lock);
 	kinfo.capacity = reserve->capacity;
+	kinfo.lifetime_usage = reserve->lifetime_usage;
+	kinfo.lifetime_input = reserve->lifetime_input;
+
 	/* TODO: Iterate through taps and return number of taps */
 	spin_unlock(&reserve->reserve_lock);
 
@@ -1192,11 +1200,19 @@ asmlinkage long sys_reserve_transfer(int src_reserve_id,
 	/* Determine how much we are transferring and debit that amount */
 	transfer_amount = (amount < src_reserve->capacity ? amount : src_reserve->capacity);
 	src_reserve->capacity -= transfer_amount;
+
+	/* Update lifetime input value for source reserve */
+	src_reserve->lifetime_usage += transfer_amount;
+
 	spin_unlock(&src_reserve->reserve_lock);
 
 	/* Add amount to the destination reserve and return */
 	spin_lock(&dest_reserve->reserve_lock);
 	dest_reserve->capacity += transfer_amount;
+
+	/* Update lifetime input value */
+	dest_reserve->lifetime_input += transfer_amount;
+
 	spin_unlock(&dest_reserve->reserve_lock);
 
 	/* We return how much was transferred */
@@ -1341,6 +1357,9 @@ asmlinkage long sys_self_bill(long billing_type, long amount)
 	spin_lock(&current->active_reserve->reserve_lock);
 
 	current->active_reserve->capacity -= amount;
+
+	/* Update lifetime usage counter */
+	current->active_reserve->lifetime_usage += amount;
 
 	spin_unlock(&current->active_reserve->reserve_lock);
 	up(&group_leader->cinder_lock);
